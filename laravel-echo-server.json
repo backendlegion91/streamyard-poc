@@ -1,0 +1,34 @@
+{
+  "authHost": "http://127.0.0.1:8000",
+  "authEndpoint": "/broadcasting/auth",
+  "clients": [],
+  "database": "mysql",
+  "databaseConfig": {
+    "mysql": {
+      "host": "127.0.0.1",
+      "port": "3306",
+      "user": "root",
+      "password": "User@123",
+      "database": "echo_server"
+    }
+  },
+  "devMode": true,
+  "host": "127.0.0.1",
+  "port": "6001",
+  "protocol": "http",
+  "socketio": {},
+  "sslCertPath": "",
+  "sslKeyPath": "",
+  "sslCertChainPath": "",
+  "sslPassphrase": "",
+  "subscribers": {
+    "http": true,
+    "mysql": true
+  },
+  "apiOriginAllow": {
+    "allowCors": true,
+    "allowOrigin": "*",
+    "allowMethods": "GET, POST",
+    "allowHeaders": "Origin, Content-Type, X-Auth-Token, Authorization, X-Requested-With"
+  }
+}

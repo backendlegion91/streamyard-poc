@@ -1,0 +1,56 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Guest View</title></head>
+<body>
+  <h3>Guest</h3>
+  <div>
+    <input id="roomId" placeholder="room id">
+    <button id="join">Join Room</button>
+  </div>
+  <div id="remoteVideos"></div>
+
+  <script>
+    const signalingHost = location.hostname;
+    const signalingWs = (location.protocol === 'https:' ? 'wss' : 'ws') + '://'+signalingHost+':8080';
+    let ws=null, pc=null;
+
+    document.getElementById('join').onclick = async () => {
+      const room = document.getElementById('roomId').value.trim();
+      ws = new WebSocket(signalingWs);
+      ws.onopen = () => ws.send(JSON.stringify({ type:'join', room }));
+      ws.onmessage = async (ev) => {
+        const data = JSON.parse(ev.data);
+        if (data.type === 'signal') await handleSignal(data.from, data.payload);
+      };
+    };
+
+    function ensurePc() {
+      if (pc) return;
+      pc = new RTCPeerConnection();
+      pc.ontrack = (ev) => {
+        const container = document.getElementById('remoteVideos');
+        const v = document.createElement('video');
+        v.autoplay=true; v.controls=true; v.playsInline=true;
+        v.srcObject = ev.streams[0];
+        container.appendChild(v);
+      };
+      pc.onicecandidate = (e) => {
+        if (!e.candidate) return;
+        ws.send(JSON.stringify({ type:'signal', payload:{ type:'ice', candidate:e.candidate }, room: document.getElementById('roomId').value.trim() }));
+      };
+    }
+
+    async function handleSignal(from, payload) {
+      ensurePc();
+      if (payload.type === 'offer') {
+        await pc.setRemoteDescription({ type:'offer', sdp: payload.sdp });
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        ws.send(JSON.stringify({ type:'signal', payload:{ type:'answer', sdp:answer.sdp }, room: document.getElementById('roomId').value.trim(), target: from }));
+      } else if (payload.type === 'ice' && payload.candidate) {
+        try { await pc.addIceCandidate(payload.candidate); } catch(e){ console.warn(e); }
+      }
+    }
+  </script>
+</body>
+</html>
