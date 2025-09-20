@@ -1,0 +1,166 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Stream POC - Host</title>
+  <style> body{font-family:Arial,sans-serif;padding:12px} video{width:320px;height:240px;background:#000;margin:6px} #grid{display:flex;flex-wrap:wrap}</style>
+</head>
+<body>
+  <h2>Host Console</h2>
+  <div>
+    Room ID: <input id="roomId" placeholder="room id (create via API)">
+    <button id="joinBtn">Join Signaling</button>
+  </div>
+  <div id="grid">
+    <div><h4>Local Camera 1</h4><video id="cam1" autoplay muted playsinline></video></div>
+    <div><h4>Local Camera 2</h4><video id="cam2" autoplay muted playsinline></video></div>
+    <div><h4>Preview (publishing)</h4><video id="preview" autoplay muted playsinline></video></div>
+    <div><h4>Uploaded Clip</h4><video id="clipPlayer" controls playsinline></video></div>
+  </div>
+
+  <div class="controls">
+    <label>Choose devices:</label>
+    <select id="videoSource1"></select>
+    <select id="videoSource2"></select>
+    <button id="startCams">Start Cameras</button>
+    <button id="publishBtn">Publish (Start Broadcast)</button>
+    <button id="stopBtn">Stop Broadcast</button>
+    <hr>
+    <form id="uploadForm">
+      <input type="file" name="file" accept="video/*" />
+      <button type="submit">Upload Clip</button>
+    </form>
+    <div><button id="playClipBtn">Play Uploaded Clip on Stream</button></div>
+    <hr>
+    <div>
+      <input id="schedRoom" placeholder="room id" />
+      <input id="schedAt" placeholder="YYYY-mm-dd HH:MM" />
+      <input id="schedPath" placeholder="/storage/uploads/your.mp4" />
+      <button id="scheduleBtn">Schedule</button>
+      <button id="triggerBtn">Trigger Now</button>
+    </div>
+  </div>
+
+<script>
+let localStream1=null, localStream2=null, pc=null, ws=null, localSenders={};
+const cam1El = document.getElementById('cam1');
+const cam2El = document.getElementById('cam2');
+const previewEl = document.getElementById('preview');
+const clipPlayer = document.getElementById('clipPlayer');
+const signalingHost = location.hostname;
+const signalingWs = (location.protocol === 'https:' ? 'wss' : 'ws') + '://'+signalingHost+':8080';
+
+async function enumerate() {
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const videoInputs = devices.filter(d => d.kind === 'videoinput');
+  const s1 = document.getElementById('videoSource1'), s2=document.getElementById('videoSource2');
+  s1.innerHTML=''; s2.innerHTML='';
+  videoInputs.forEach(d => {
+    const o1 = new Option(d.label||'camera', d.deviceId);
+    const o2 = new Option(d.label||'camera', d.deviceId);
+    s1.add(o1); s2.add(o2);
+  });
+}
+document.getElementById('startCams').onclick = async () => {
+  const d1 = document.getElementById('videoSource1').value;
+  const d2 = document.getElementById('videoSource2').value;
+  if (d1) { localStream1 && localStream1.getTracks().forEach(t=>t.stop()); localStream1 = await navigator.mediaDevices.getUserMedia({ video:{ deviceId:{ exact:d1 } }, audio:false }); cam1El.srcObject = localStream1; }
+  if (d2) { localStream2 && localStream2.getTracks().forEach(t=>t.stop()); localStream2 = await navigator.mediaDevices.getUserMedia({ video:{ deviceId:{ exact:d2 } }, audio:false }); cam2El.srcObject = localStream2; }
+  const preview = new MediaStream();
+  if (localStream1) preview.addTrack(localStream1.getVideoTracks()[0]);
+  if (localStream2) preview.addTrack(localStream2.getVideoTracks()[0]);
+  previewEl.srcObject = preview;
+};
+
+document.getElementById('joinBtn').onclick = () => {
+  if (ws && ws.readyState===WebSocket.OPEN) return alert('already connected to signaling');
+  ws = new WebSocket(signalingWs);
+  ws.onopen = () => {
+    const room = document.getElementById('roomId').value.trim();
+    ws.send(JSON.stringify({ type:'join', room }));
+    console.log('joined', room);
+  };
+  ws.onmessage = async (ev) => {
+    const data = JSON.parse(ev.data);
+    if (data.type === 'signal') await handleSignal(data.from, data.payload);
+    else if (data.type === 'peer-joined') await createOffer();
+  };
+};
+
+function ensurePc() {
+  if (pc) return;
+  pc = new RTCPeerConnection();
+  pc.onicecandidate = (e) => {
+    if (!e.candidate) return;
+    ws.send(JSON.stringify({ type:'signal', payload:{ type:'ice', candidate:e.candidate }, room: document.getElementById('roomId').value.trim() }));
+  };
+}
+
+async function createOffer() {
+  ensurePc();
+  if (localStream1 && localStream1.getVideoTracks().length) localSenders.cam1 = pc.addTrack(localStream1.getVideoTracks()[0], localStream1);
+  if (localStream2 && localStream2.getVideoTracks().length) localSenders.cam2 = pc.addTrack(localStream2.getVideoTracks()[0], localStream2);
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  ws.send(JSON.stringify({ type:'signal', payload:{ type:'offer', sdp:offer.sdp }, room: document.getElementById('roomId').value.trim() }));
+}
+
+async function handleSignal(from, payload) {
+  ensurePc();
+  if (payload.type === 'answer') {
+    await pc.setRemoteDescription({ type:'answer', sdp: payload.sdp });
+  } else if (payload.type==='offer') {
+    await pc.setRemoteDescription({ type:'offer', sdp: payload.sdp });
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    ws.send(JSON.stringify({ type:'signal', payload:{ type:'answer', sdp: answer.sdp }, room: document.getElementById('roomId').value.trim(), target: from }));
+  } else if (payload.type==='ice' && payload.candidate) {
+    try { await pc.addIceCandidate(payload.candidate); } catch(e){ console.warn(e); }
+  }
+}
+
+document.getElementById('publishBtn').onclick = async () => { await createOffer(); alert('Offer created. Guests must connect.'); };
+document.getElementById('stopBtn').onclick = () => { if (pc) { pc.close(); pc=null; } alert('Stopped'); };
+
+document.getElementById('uploadForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const f = e.target.file.files[0]; if(!f) return alert('select file');
+  const fd = new FormData(); fd.append('file', f);
+  const res = await fetch('/api/upload', { method:'POST', body:fd });
+  const j = await res.json();
+  if (j.path) { clipPlayer.src = j.path; alert('Uploaded: '+j.path); }
+};
+
+document.getElementById('playClipBtn').onclick = async () => {
+  if (!clipPlayer.src) return alert('No clip loaded');
+  await clipPlayer.play();
+  const clipStream = clipPlayer.captureStream ? clipPlayer.captureStream() : null;
+  if (!clipStream) return alert('captureStream not supported');
+  const videoTrack = clipStream.getVideoTracks()[0];
+  if (localSenders.cam1 && localSenders.cam1.replaceTrack) await localSenders.cam1.replaceTrack(videoTrack);
+  else pc.addTrack(videoTrack, clipStream);
+  const merged = new MediaStream();
+  if (videoTrack) merged.addTrack(videoTrack);
+  if (localStream2 && localStream2.getVideoTracks()[0]) merged.addTrack(localStream2.getVideoTracks()[0]);
+  previewEl.srcObject = merged;
+};
+
+document.getElementById('scheduleBtn').onclick = async () => {
+  const room = document.getElementById('schedRoom').value.trim();
+  const at = document.getElementById('schedAt').value.trim();
+  const path = document.getElementById('schedPath').value.trim();
+  if (!room || !at || !path) return alert('fill fields');
+  const res = await fetch('/api/streams/' + room + '/schedule', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ scheduled_at: at, pre_recorded_path: path }) });
+  const j = await res.json(); alert('Scheduled: ' + JSON.stringify(j));
+};
+
+document.getElementById('triggerBtn').onclick = async () => {
+  const room = document.getElementById('schedRoom').value.trim();
+  const res = await fetch('/api/streams/' + room + '/trigger', { method:'POST' });
+  const j = await res.json(); alert('Triggered: ' + JSON.stringify(j));
+};
+
+enumerate();
+</script>
+</body>
+</html>
