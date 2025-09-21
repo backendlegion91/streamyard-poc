@@ -18,10 +18,9 @@ Route::post('/switch-camera', [StreamController::class, 'switchCamera']);
 
 use App\Http\Controllers\VideoController;
 
-Route::get('/', function(){
-    $videos = \App\Models\Video::all();
-    return view('live', compact('videos'));
-});
+// Route::get('/', function(){
+//     $videos = \App\Models\Video::all();
+//     return view('live', compact('videos'));
+// });
 
 Route::post('/upload-video', [VideoController::class,'upload']);
-Route::post('/schedule-video', [VideoController::class,'schedule'])
